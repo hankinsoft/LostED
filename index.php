@@ -46,9 +46,6 @@ if (!isset($_COOKIE['username']) || !isset($_COOKIE['password'])) {
     <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.15/codemirror.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.15/mode/clike/clike.min.js"></script>
 
-	<!-- JS Beautifier -->
-	<script src="https://cdnjs.cloudflare.com/ajax/libs/js-beautify/1.14.0/beautify.min.js"></script>
-
     <style>
         html,
         body {
@@ -76,6 +73,15 @@ if (!isset($_COOKIE['username']) || !isset($_COOKIE['password'])) {
         .welcomeTab {
 	        padding: 5px;
         }
+        
+        .k-link .k-icon {
+			margin-left: 10px;
+		}
+
+		.tab-modified::after {
+		    content: ' (modified)';
+		    color: grey;
+		}
         
         .errorMessage {
 	        color: rgba(255, 0, 0, 1);
@@ -134,6 +140,8 @@ if (!isset($_COOKIE['username']) || !isset($_COOKIE['password'])) {
 </head>
 
 <body>
+<div id="messageDialog"></div>
+
 <span id="notification"></span>
 
 <div id="splitview">
@@ -156,6 +164,21 @@ if (!isset($_COOKIE['username']) || !isset($_COOKIE['password'])) {
 </div>
 
 <script>
+	function showMessage(title, data) {
+		// Replace newlines with <br />'s.
+		data = data.replace(/\n/g, "<br />");
+
+	    var dialog = $("#messageDialog").data("kendoDialog");
+
+	    dialog.title(title);
+
+	    // Update the content of the dialog with your results
+	    dialog.content("<pre>" + data + "</pre>");
+	
+	    // Open the dialog
+	    dialog.open();
+	}
+
 	function initializeCodeMirror() {
 		var currentEndString = "";
 		CodeMirror.defineMode("clike_with_foreach", function(config, parserConfig) {
@@ -233,6 +256,18 @@ if (!isset($_COOKIE['username']) || !isset($_COOKIE['password'])) {
 	}
 
     $(document).ready(function () {
+		$("#messageDialog").kendoDialog({
+		    width: "650px",
+		    title: "Results",
+		    closable: true,
+		    modal: true,
+		    content: "<p>Your results will be displayed here.</p>",
+		    actions: [
+		        { text: 'Close' }
+		    ],
+		    visible: false // Initially hidden; use .open() to show
+		});
+
 	    // Initialize the toolbar
 	    $("#filesToolbar").kendoToolBar({
 	        items: [
@@ -240,14 +275,16 @@ if (!isset($_COOKIE['username']) || !isset($_COOKIE['password'])) {
                     click: function () {
 						saveFile();
                     } },
+	            { type: "button", text: "Checkit", enable: false, attributes: { id: "checkitButton" },
+                    click: function () {
+                        runCheckit();
+                    } },
 /*
 	            { type: "button", text: "Format", enable: false, attributes: { id: "formatButton" },
                     click: function () {
                         formatCode();
                     } },
 */
-//	            { type: "button", text: "Checkit", enable: false }
-        // { type: "button", text: "Checkit", enable: false }, // Uncomment if you want this button
 		        { template: "<div class='toolbar-spacer'></div>" },
 
 		        { 
@@ -336,13 +373,16 @@ if (!isset($_COOKIE['username']) || !isset($_COOKIE['password'])) {
 				    } else {
 	                    // Add a new tab
 	                    tabstrip.append({
-	                        text: node.name,
+							text: '',
 	                        content: '<div class="loading-indicator">Loading...</div><div class="editor" id="' + node.id + '"></div>',
 	                    });
 	
 	                    // Add close icon to the new tab
 	                    var newTab = tabstrip.tabGroup.children("li:last");
 	                    var kLinkSpan = newTab.find('.k-link');
+	                    
+	                    kLinkSpan.append('<span class="tab-title">' + node.name + '</span>');
+	                    
 	                    kLinkSpan.append('<span class="k-icon k-i-close"></span>');
 						newTab.attr("file-id", node.id);
 
@@ -378,9 +418,23 @@ if (!isset($_COOKIE['username']) || !isset($_COOKIE['password'])) {
 							                    lineNumbers: true,
 							                    styleActiveLine: true,
 							                });
-							
+
 							                editor.setValue(data.contents); // Set CodeMirror value to contents attribute in response
+											editor.initialValue = editor.getValue();
+
 							                editor.refresh();
+
+											editor.on("change", function(cm, change) {
+  											  // Mark our tab as modified
+												  var titleElement = kLinkSpan.find(".tab-title");
+
+											    // Compare with the initial content stored in the custom property
+											    if(cm.getValue() === cm.initialValue) {
+													titleElement.removeClass('tab-modified');
+											    } else {
+													titleElement.addClass('tab-modified');
+											    }
+											});
 
 											// Update tabs afterwards
 										    setTimeout(function() {
@@ -464,6 +518,7 @@ if (!isset($_COOKIE['username']) || !isset($_COOKIE['password'])) {
 	    if (selectedTab.length === 0) {
 		    // Disable all
 	        toolbar.enable("#saveButton", false);
+	        toolbar.enable("#checkitButton", false);
 	        toolbar.enable("#formatButton", false);
 	        return;
 	    }
@@ -478,9 +533,11 @@ if (!isset($_COOKIE['username']) || !isset($_COOKIE['password'])) {
 		// If we have an error, or no codeMirror element, then we will disable the UI buttons.
 		if (null !== errorElement || null === codeMirrorElement) {
 	        toolbar.enable("#saveButton", false);
+	        toolbar.enable("#checkitButton", false);
 	        toolbar.enable("#formatButton", false);
 	    } else {
 	        toolbar.enable("#saveButton", true);
+	        toolbar.enable("#checkitButton", true);
 	        toolbar.enable("#formatButton", true);
 	    }
     }
@@ -533,10 +590,17 @@ if (!isset($_COOKIE['username']) || !isset($_COOKIE['password'])) {
 		        var notification = createNotification();
 				if(data.success) {
 		            editor.setValue(data.contents);
+		            editor.initialValue = editor.getValue();
+
 	                notification.show({
 	                    kendoTitle: "Save Successful",
 	                    description: "File has been saved successfully."
 	                }, "info");
+
+					var titleElement = selectedTab.find(".tab-title");
+					
+					// Clear modified
+					titleElement.removeClass('tab-modified');
 	            }
 	            else {
 	                notification.show({
@@ -555,6 +619,74 @@ if (!isset($_COOKIE['username']) || !isset($_COOKIE['password'])) {
         });
     }
 
+
+	function runCheckit() {
+	    // Get the TabStrip object
+	    var tabStrip = $("#tabstrip").data("kendoTabStrip");
+
+	    // Check if any tab is selected
+	    var selectedTab = tabStrip.select();
+	    if (selectedTab.length === 0) {
+	        alert("No tab is selected.");
+	        return;
+	    }
+
+        var targetFile = selectedTab.attr('file-id');
+
+	    // Get the content of the selected tab
+	    var activeTabContent = tabStrip.contentElement(selectedTab.index());
+
+	    // Get the CodeMirror instance from the active tab
+	    var codeMirrorElement = activeTabContent.querySelector(".CodeMirror");
+
+	    if (!codeMirrorElement) {
+	        alert("No editor is found in the selected tab.");
+	        return;
+	    }
+
+		var titleElement = selectedTab.find(".tab-title");
+		var modified = titleElement.hasClass('tab-modified');
+
+		if(modified) {
+			alert('You must save the file before running checkit.');
+			return;
+		}
+
+	    var editor = codeMirrorElement.CodeMirror;
+	    
+	    // Get code from the current CodeMirror instance
+        var fileContents = editor.getValue();
+
+        $.ajax({
+            cache: false,
+            url: 'checkfile.php?' + "&_=" + new Date().getTime(),
+            type: 'POST',
+            data: {
+                targetFile: targetFile
+            },
+            success: function(response) {
+		        var data;
+		
+		        // Try to parse the response; if it fails, use the response as it is
+		        try {
+		            data = JSON.parse(response);
+		        } catch (e) {
+		            data = response;
+		        }
+		        
+		        // Show the response
+		        showMessage('Checkit', data.message);
+            },
+            error: function(xhr, status, error) {
+	            var notification = createNotification();
+                notification.show({
+                    kendoTitle: "Save Failed",
+                    description: "An error occurred while saving your data."
+                }, "error");
+            }
+        });
+	} // End of runCheckit
+
 	function formatCode() {
 	    // Get the TabStrip object
 	    var tabStrip = $("#tabstrip").data("kendoTabStrip");
@@ -565,10 +697,12 @@ if (!isset($_COOKIE['username']) || !isset($_COOKIE['password'])) {
 	        alert("No tab is selected.");
 	        return;
 	    }
-	
+
+        var targetFile = selectedTab.attr('file-id');
+
 	    // Get the content of the selected tab
 	    var activeTabContent = tabStrip.contentElement(selectedTab.index());
-	
+
 	    // Get the CodeMirror instance from the active tab
 	    var codeMirrorElement = activeTabContent.querySelector(".CodeMirror");
 
@@ -580,13 +714,50 @@ if (!isset($_COOKIE['username']) || !isset($_COOKIE['password'])) {
 	    var editor = codeMirrorElement.CodeMirror;
 	    
 	    // Get code from the current CodeMirror instance
-        var code = editor.getValue();
-        try {
-            var formattedCode = js_beautify(code, { indent_size: 4 }); // Using JS-Beautify
-            editor.setValue(formattedCode);
-        } catch (error) {
-            alert("An error occurred while formatting the code.");
-        }
+        var fileContents = editor.getValue();
+
+        $.ajax({
+            cache: false,
+            url: 'format.php?' + "&_=" + new Date().getTime(),
+            type: 'POST',
+            data: {
+                targetFile: targetFile,
+                fileContents: fileContents
+            },
+            success: function(response) {
+		        var data;
+		
+		        // Try to parse the response; if it fails, use the response as it is
+		        try {
+		            data = JSON.parse(response);
+		        } catch (e) {
+		            data = response;
+		        }
+
+		        var notification = createNotification();
+				if(data.success) {
+		            editor.setValue(data.contents);
+	                notification.show({
+	                    kendoTitle: "Format successful",
+	                    description: "File contents has been updated."
+	                }, "info");
+	            }
+	            else {
+	                notification.show({
+	                    kendoTitle: "Format failed",
+	                    description: "An error occurred while formatting your data."
+	                }, "error");
+	            }
+            },
+            error: function(xhr, status, error) {
+	            var notification = createNotification();
+                notification.show({
+                    kendoTitle: "Save Failed",
+                    description: "An error occurred while saving your data."
+                }, "error");
+            }
+        });
+
 	}
 </script>
 <script type="text/x-kendo-template" id="infoTemplate">
